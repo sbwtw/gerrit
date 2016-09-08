@@ -51,12 +51,11 @@ fn process_branch(path: &str, branch: &str) {
 
     println!("branch: {}, status: {}", branch, status);
 
-    let mut delete = false;
-    match status {
+    let delete = match status {
         "MERGED" | "ABANDONED"
-            => delete = true,
-        _ => {},
-    }
+            => true,
+        _ => false,
+    };
 
     if !delete {return;}
 
