@@ -52,7 +52,7 @@ fn process_branch(path: &str, branch: &str) {
     println!("branch: {}, status: {}", branch, status);
 
     let mut delete = false;
-    match object["status"].as_string().unwrap() {
+    match status {
         "MERGED" | "ABANDONED"
             => delete = true,
         _ => {},
