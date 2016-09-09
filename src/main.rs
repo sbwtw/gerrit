@@ -62,8 +62,6 @@ fn process_branch(gerrit: &Gerrit, branch: &str) {
     let json = content.parse::<Json>().unwrap();
     let list = json.as_array().unwrap();
 
-    println!("{} - {}", path, addr);
-
     if list.is_empty() {return;}
 
     let object = list[0].as_object().unwrap();
