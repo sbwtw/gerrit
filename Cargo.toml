@@ -3,10 +3,11 @@ name = "gerrit"
 version = "0.1.0"
 authors = ["石博文 <sbw@sbw.so>"]
 
-[dependencies]
-hyper = "*"
-rustc-serialize = "*"
-
 [[bin]]
 name = "git-clear"
 path = "src/main.rs"
+
+[dependencies]
+hyper = "*"
+clap = "*"
+rustc-serialize = "*"

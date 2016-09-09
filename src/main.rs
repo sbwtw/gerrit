@@ -1,23 +1,41 @@
 
 extern crate hyper;
+extern crate clap;
 extern crate rustc_serialize;
 
 use hyper::client::*;
+
+use clap::{Arg, App};
 
 use rustc_serialize::json::*;
 
 use std::io::*;
 use std::env::*;
+use std::sync::Arc;
 use std::process::Command;
 use std::thread;
 
-static GERRIT: &'static str = "https://cr.deepin.io";
+struct Gerrit {
+    pub path: String,
+    pub addr: String,
+}
 
-fn process_branch(path: &str, branch: &str) {
+impl Gerrit {
 
+    pub fn new(path: &str, addr: &str) -> Gerrit {
+        Gerrit {
+            path: path.to_owned(),
+            addr: addr.to_owned(),
+        }
+    }
+
+}
+
+fn process_branch(gerrit: &Gerrit, branch: &str) {
+
+    let ref path = gerrit.path;
+    let ref addr = gerrit.addr;
     let branch = branch.trim();
-    // let client = Client::new();
-    //println!("{}", branch);
 
     // get last commit info
     let result = Command::new("git")
@@ -29,7 +47,7 @@ fn process_branch(path: &str, branch: &str) {
 
     let hash = String::from_utf8_lossy(&result.stdout);
     //let url = format!("{}/changes/?q=topic:{}+commit:{}", GERRIT, branch, hash);
-    let url = format!("{}/changes/?q=commit:{}", GERRIT, hash);
+    let url = format!("{}/changes/?q=commit:{}", addr, hash);
     //println!("{:?}", url);
 
     let client = Client::new();
@@ -43,6 +61,8 @@ fn process_branch(path: &str, branch: &str) {
 
     let json = content.parse::<Json>().unwrap();
     let list = json.as_array().unwrap();
+
+    println!("{} - {}", path, addr);
 
     if list.is_empty() {return;}
 
@@ -72,7 +92,23 @@ fn process_branch(path: &str, branch: &str) {
 
 fn main() {
 
+    let matches = App::new("Gerrit tools")
+                        .version("1.0")
+                        .author("sbw <sbw@sbw.so>")
+                        .about("gerrit merged/abandoned branch cleanner")
+                        .arg(Arg::with_name("address")
+                                .short("a")
+                                .long("addr")
+                                .value_name("ADDR")
+                                .help("set gerrit address")
+                                .takes_value(true)
+                                .default_value("https://cr.deepin.io"))
+                        .get_matches();
+
+    let addr = matches.value_of("address").unwrap();
     let path = current_dir().unwrap().to_str().unwrap().to_owned();
+
+    let gerrit = Arc::new(Gerrit::new(&path, &addr));
 
     let result = Command::new("git")
                             .arg("branch")
@@ -90,9 +126,9 @@ fn main() {
                                 .map(|branch| {
 
         let branch = branch.to_owned();
-        let path = path.clone();
+        let gerrit = gerrit.clone();
         thread::spawn(move || {
-            process_branch(&path, &branch)
+            process_branch(&gerrit, &branch)
         })
     }).collect();
 
