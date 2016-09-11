@@ -1,4 +1,7 @@
 
+#[macro_use]
+extern crate log;
+extern crate env_logger;
 extern crate hyper;
 extern crate clap;
 extern crate rustc_serialize;
@@ -46,9 +49,9 @@ fn process_branch(gerrit: &Gerrit, branch: &str) {
                             .expect("fail to get last commit hash");
 
     let hash = String::from_utf8_lossy(&result.stdout);
-    //let url = format!("{}/changes/?q=topic:{}+commit:{}", GERRIT, branch, hash);
+    let hash = hash.trim();
+    info!("brach: {}, hash: {}", branch, hash);
     let url = format!("{}/changes/?q=commit:{}", addr, hash);
-    //println!("{:?}", url);
 
     let client = Client::new();
     let mut response = client.get(&url).send().unwrap();
@@ -103,8 +106,13 @@ fn main() {
                                 .default_value("https://cr.deepin.io"))
                         .get_matches();
 
+    env_logger::init().unwrap();
+
     let addr = matches.value_of("address").unwrap();
     let path = current_dir().unwrap().to_str().unwrap().to_owned();
+
+    info!("addr: {}", addr);
+    info!("path: {}", path);
 
     let gerrit = Arc::new(Gerrit::new(&path, &addr));
 
@@ -122,6 +130,8 @@ fn main() {
                                     !branch.is_empty() && !branch.starts_with('*')
                                 })
                                 .map(|branch| {
+
+        info!("process branch: {}", branch);
 
         let branch = branch.to_owned();
         let gerrit = gerrit.clone();

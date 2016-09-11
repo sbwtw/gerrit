@@ -8,6 +8,8 @@ name = "git-clear"
 path = "src/main.rs"
 
 [dependencies]
+log = "*"
+env_logger = "*"
 hyper = "*"
 clap = "*"
 rustc-serialize = "*"
