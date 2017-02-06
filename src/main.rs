@@ -4,13 +4,13 @@ extern crate log;
 extern crate env_logger;
 extern crate hyper;
 extern crate clap;
-extern crate rustc_serialize;
+extern crate serde_json;
 
 use hyper::client::*;
 
 use clap::{Arg, App};
 
-use rustc_serialize::json::*;
+use serde_json::Value;
 
 use std::io::*;
 use std::env::*;
@@ -24,14 +24,12 @@ struct Gerrit {
 }
 
 impl Gerrit {
-
     pub fn new(path: &str, addr: &str) -> Gerrit {
         Gerrit {
             path: path.to_owned(),
             addr: addr.to_owned(),
         }
     }
-
 }
 
 fn process_branch(gerrit: &Gerrit, branch: &str) {
@@ -42,11 +40,11 @@ fn process_branch(gerrit: &Gerrit, branch: &str) {
 
     // get last commit info
     let result = Command::new("git")
-                            .arg("rev-parse")
-                            .arg(branch)
-                            .current_dir(path)
-                            .output()
-                            .expect("fail to get last commit hash");
+        .arg("rev-parse")
+        .arg(branch)
+        .current_dir(path)
+        .output()
+        .expect("fail to get last commit hash");
 
     let hash = String::from_utf8_lossy(&result.stdout);
     let hash = hash.trim();
@@ -62,31 +60,34 @@ fn process_branch(gerrit: &Gerrit, branch: &str) {
     // remove )}]' characters
     content.drain(0..4);
 
-    let json = content.parse::<Json>().unwrap();
+    let json = content.parse::<Value>().unwrap();
     let list = json.as_array().unwrap();
 
-    if list.is_empty() {return;}
+    if list.is_empty() {
+        return;
+    }
 
     let object = list[0].as_object().unwrap();
-    let status = object["status"].as_string().unwrap();
+    let status = object["status"].as_str().unwrap();
 
     println!("branch: {}, status: {}", branch, status);
 
     let delete = match status {
-        "MERGED" | "ABANDONED"
-            => true,
+        "MERGED" | "ABANDONED" => true,
         _ => false,
     };
 
-    if !delete {return;}
+    if !delete {
+        return;
+    }
 
     let result = Command::new("git")
-                            .arg("branch")
-                            .arg("-D")
-                            .arg(branch)
-                            .current_dir(path)
-                            .output()
-                            .expect("delete branch failed");
+        .arg("branch")
+        .arg("-D")
+        .arg(branch)
+        .current_dir(path)
+        .output()
+        .expect("delete branch failed");
 
     println!("{}", String::from_utf8_lossy(&result.stdout).trim());
 }
@@ -94,17 +95,17 @@ fn process_branch(gerrit: &Gerrit, branch: &str) {
 fn main() {
 
     let matches = App::new("Gerrit tools")
-                        .version("1.0")
-                        .author("sbw <sbw@sbw.so>")
-                        .about("gerrit merged/abandoned branch cleanner")
-                        .arg(Arg::with_name("address")
-                                .short("a")
-                                .long("addr")
-                                .value_name("ADDR")
-                                .help("set gerrit address")
-                                .takes_value(true)
-                                .default_value("https://cr.deepin.io"))
-                        .get_matches();
+        .version("1.0")
+        .author("sbw <sbw@sbw.so>")
+        .about("gerrit merged/abandoned branch cleanner")
+        .arg(Arg::with_name("address")
+            .short("a")
+            .long("addr")
+            .value_name("ADDR")
+            .help("set gerrit address")
+            .takes_value(true)
+            .default_value("https://cr.deepin.io"))
+        .get_matches();
 
     env_logger::init().unwrap();
 
@@ -117,28 +118,27 @@ fn main() {
     let gerrit = Arc::new(Gerrit::new(&path, &addr));
 
     let result = Command::new("git")
-                            .arg("branch")
-                            .current_dir(&path)
-                            .output()
-                            .expect("fail to get branch info");
+        .arg("branch")
+        .current_dir(&path)
+        .output()
+        .expect("fail to get branch info");
 
     let output = String::from_utf8_lossy(&result.stdout);
 
     let threads: Vec<_> = output.split('\n')
-                                .filter(|branch| {
-                                    let branch = branch.trim();
-                                    !branch.is_empty() && !branch.starts_with('*')
-                                })
-                                .map(|branch| {
-
-        info!("process branch: {}", branch);
-
-        let branch = branch.to_owned();
-        let gerrit = gerrit.clone();
-        thread::spawn(move || {
-            process_branch(&gerrit, &branch)
+        .filter(|branch| {
+            let branch = branch.trim();
+            !branch.is_empty() && !branch.starts_with('*')
         })
-    }).collect();
+        .map(|branch| {
+
+            info!("process branch: {}", branch);
+
+            let branch = branch.to_owned();
+            let gerrit = gerrit.clone();
+            thread::spawn(move || process_branch(&gerrit, &branch))
+        })
+        .collect();
 
     for t in threads {
         assert!(t.join().is_ok());
