@@ -3,10 +3,14 @@
 extern crate log;
 extern crate env_logger;
 extern crate hyper;
+extern crate hyper_native_tls;
 extern crate clap;
 extern crate serde_json;
 
 use hyper::client::*;
+use hyper::net::HttpsConnector;
+
+use hyper_native_tls::NativeTlsClient;
 
 use clap::{Arg, App};
 
@@ -51,7 +55,9 @@ fn process_branch(gerrit: &Gerrit, branch: &str) {
     info!("brach: {}, hash: {}", branch, hash);
     let url = format!("{}/changes/?q=commit:{}", addr, hash);
 
-    let client = Client::new();
+    let ssl = NativeTlsClient::new().unwrap();
+    let connector = HttpsConnector::new(ssl);
+    let client = Client::with_connector(connector);
     let mut response = client.get(&url).send().unwrap();
     let mut content = String::new();
     assert!(response.read_to_string(&mut content).is_ok());
