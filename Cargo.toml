@@ -1,6 +1,6 @@
 [package]
 name = "gerrit"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["石博文 <sbw@sbw.so>"]
 
 [[bin]]
@@ -8,9 +8,12 @@ name = "git-clear"
 path = "src/main.rs"
 
 [dependencies]
-log = "*"
-env_logger = "*"
 hyper = "*"
-hyper-native-tls = "*"
+hyper-tls = "*"
+tokio-core = "*"
+futures = "*"
 clap = "*"
+log = "*"
 serde_json = "*"
+pretty_env_logger = "*"
+num_cpus = "*"

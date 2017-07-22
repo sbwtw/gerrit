@@ -1,127 +1,58 @@
-
+extern crate tokio_core;
+extern crate hyper;
+extern crate hyper_tls;
+extern crate futures;
+extern crate clap;
+extern crate pretty_env_logger;
 #[macro_use]
 extern crate log;
-extern crate env_logger;
-extern crate hyper;
-extern crate hyper_native_tls;
-extern crate clap;
+extern crate num_cpus;
 extern crate serde_json;
 
-use hyper::client::*;
-use hyper::net::HttpsConnector;
-
-use hyper_native_tls::NativeTlsClient;
-
-use clap::{Arg, App};
-
+use hyper::Client;
+use hyper_tls::HttpsConnector;
+use futures::future::{Future, join_all};
+use futures::sync::mpsc::channel;
+use futures::{Stream, Sink};
+use clap::{App, Arg};
 use serde_json::Value;
 
-use std::io::*;
 use std::env::*;
-use std::sync::Arc;
-use std::process::Command;
+use std::ops::Deref;
+use std::cell::RefCell;
 use std::thread;
-
-struct Gerrit {
-    pub path: String,
-    pub addr: String,
-}
-
-impl Gerrit {
-    pub fn new(path: &str, addr: &str) -> Gerrit {
-        Gerrit {
-            path: path.to_owned(),
-            addr: addr.to_owned(),
-        }
-    }
-}
-
-fn process_branch(gerrit: &Gerrit, branch: &str) {
-
-    let ref path = gerrit.path;
-    let ref addr = gerrit.addr;
-    let branch = branch.trim();
-
-    // get last commit info
-    let result = Command::new("git")
-        .arg("rev-parse")
-        .arg(branch)
-        .current_dir(path)
-        .output()
-        .expect("fail to get last commit hash");
-
-    let hash = String::from_utf8_lossy(&result.stdout);
-    let hash = hash.trim();
-    info!("brach: {}, hash: {}", branch, hash);
-    let url = format!("{}/changes/?q=commit:{}", addr, hash);
-
-    let ssl = NativeTlsClient::new().unwrap();
-    let connector = HttpsConnector::new(ssl);
-    let client = Client::with_connector(connector);
-    let mut response = client.get(&url).send().unwrap();
-    let mut content = String::new();
-    assert!(response.read_to_string(&mut content).is_ok());
-    assert!(content.len() > 4);
-
-    // remove )}]' characters
-    content.drain(0..4);
-
-    let json = content.parse::<Value>().unwrap();
-    let list = json.as_array().unwrap();
-
-    if list.is_empty() {
-        return;
-    }
-
-    let object = list[0].as_object().unwrap();
-    let status = object["status"].as_str().unwrap();
-
-    println!("branch: {}, status: {}", branch, status);
-
-    let delete = match status {
-        "MERGED" | "ABANDONED" => true,
-        _ => false,
-    };
-
-    if !delete {
-        return;
-    }
-
-    let result = Command::new("git")
-        .arg("branch")
-        .arg("-D")
-        .arg(branch)
-        .current_dir(path)
-        .output()
-        .expect("delete branch failed");
-
-    println!("{}", String::from_utf8_lossy(&result.stdout).trim());
-}
+use std::process::Command;
 
 fn main() {
-
     let matches = App::new("Gerrit tools")
-        .version("1.0")
+        .version("2.0")
         .author("sbw <sbw@sbw.so>")
         .about("gerrit merged/abandoned branch cleanner")
-        .arg(Arg::with_name("address")
-            .short("a")
-            .long("addr")
-            .value_name("ADDR")
-            .help("set gerrit address")
-            .takes_value(true)
-            .default_value("https://cr.deepin.io"))
+        .arg(
+            Arg::with_name("address")
+                .short("a")
+                .long("addr")
+                .value_name("ADDR")
+                .help("set gerrit address")
+                .takes_value(true)
+                .default_value("https://cr.deepin.io"),
+        )
         .get_matches();
 
-    env_logger::init().unwrap();
+    pretty_env_logger::init().unwrap();
 
     let addr = matches.value_of("address").unwrap();
+    // let path = "/home/Projects/dde-session-ui";
     let path = current_dir().unwrap().to_str().unwrap().to_owned();
 
     info!("addr: {}", addr);
     info!("path: {}", path);
 
-    let gerrit = Arc::new(Gerrit::new(&path, &addr));
+    let mut core = tokio_core::reactor::Core::new().unwrap();
+    let handle = core.handle();
+    let client = Client::configure()
+        .connector(HttpsConnector::new(4, &handle).unwrap())
+        .build(&handle);
 
     let result = Command::new("git")
         .arg("branch")
@@ -130,23 +61,69 @@ fn main() {
         .expect("fail to get branch info");
 
     let output = String::from_utf8_lossy(&result.stdout);
-
-    let threads: Vec<_> = output.split('\n')
-        .filter(|branch| {
-            let branch = branch.trim();
-            !branch.is_empty() && !branch.starts_with('*')
-        })
-        .map(|branch| {
-
-            info!("process branch: {}", branch);
-
-            let branch = branch.to_owned();
-            let gerrit = gerrit.clone();
-            thread::spawn(move || process_branch(&gerrit, &branch))
-        })
+    let r: Vec<String> = output
+        .split('\n')
+        .map(|b| b.trim())
+        .filter(|b| !b.is_empty() && !b.starts_with('*'))
+        .map(|b| b.to_owned())
         .collect();
 
-    for t in threads {
-        assert!(t.join().is_ok());
-    }
+    let (mut tx, rx) = channel(num_cpus::get());
+    let p = path.clone();
+    thread::spawn(move || for b in r {
+        let exec = Command::new("git")
+            .arg("rev-parse")
+            .arg(b.clone())
+            .current_dir(&p)
+            .output()
+            .expect("failed to get commit hash");
+
+        let hash = String::from_utf8_lossy(&exec.stdout).trim().to_owned();
+
+        tx = tx.send((b, hash)).wait().unwrap();
+    });
+
+    let p = RefCell::new(path);
+    let r: Vec<_> = rx.map(|(b, h)| {
+        info!("{} {}", b, h);
+
+        let p = p.borrow();
+        let url = format!("{}/changes/?q=commit:{}", addr, h);
+        client.get(url.parse().unwrap()).and_then(move |r| {
+            r.body().concat2().and_then(move |r| {
+
+                let json: Value = serde_json::from_slice(&r[4..]).unwrap();
+                let list = json.as_array().unwrap();
+                if list.is_empty() {
+                    return Ok(());
+                }
+
+                let object = list[0].as_object().unwrap();
+                let status = object["status"].as_str().unwrap();
+
+                println!("branch: {}, status: {}", b, status);
+
+                match status {
+                    "MERGED" | "ABANDONED" => {}
+                    _ => return Ok(()),
+                }
+
+                let exec = Command::new("git")
+                    .arg("branch")
+                    .arg("-D")
+                    .arg(b)
+                    .current_dir(p.deref())
+                    .output()
+                    .expect("failed to get commit hash");
+                println!("{}", String::from_utf8_lossy(&exec.stdout).trim());
+
+                Ok(())
+            })
+        })
+
+    }).collect()
+        .wait()
+        .unwrap();
+
+    let _ = core.run(join_all(r)).unwrap();
 }
